@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+LABEL org.opencontainers.image.source="https://github.com/peaceful-octopus/jellysports"
+LABEL org.opencontainers.image.description="Live sports streams as an m3u/XMLTV feed for Jellyfin Live TV"
+LABEL org.opencontainers.image.licenses="MIT"
+
 # Chromium is used only to read the event listing.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium chromium-driver \

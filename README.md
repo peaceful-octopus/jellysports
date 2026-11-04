@@ -69,11 +69,16 @@ Useful options:
 The playlist and guide are written to `<output>/docs/jellysports.m3u` and `<output>/docs/jellysports.xml`. An event
 appears there once a working stream is found and is removed several hours after kickoff.
 
+The proxy also serves both files, plus the event images, so a single base URL is all Jellyfin needs:
+
+- Playlist: `http://<host>:8099/jellysports.m3u`
+- Guide: `http://<host>:8099/jellysports.xml`
+
 Chrome is located automatically. Set `CHROME_BIN` and `CHROMEDRIVER` to use a specific browser and driver.
 
 Once you have run the program, make sure to link to the .m3u's in the Jellyfin dashboard:
 
-`Dashboard > Live TV > Tuner Devices (+) > Tuner Type (M3U Tuner) > File or URL (enter path)`
+`Dashboard > Live TV > Tuner Devices (+) > Tuner Type (M3U Tuner) > File or URL (enter the playlist URL above)`
 
 !['Dashboard'](https://i.ibb.co/7Vxvqkp/Screen-Shot-2022-01-11-at-10-47-26-AM.png)
 

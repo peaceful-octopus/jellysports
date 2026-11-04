@@ -5,6 +5,7 @@ builds the playlist from the CDN's segment index and serves each image segment d
 No browser is involved. Upstream is only contacted while a client is requesting.
 """
 import collections
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, Optional
@@ -17,6 +18,7 @@ from .pretty_print import *
 
 SEGMENT_CACHE_SIZE = 8
 KEY_CHARS = set("0123456789abcdef")
+DOCUMENTS = {"jellysports.m3u": "audio/x-mpegurl", "jellysports.xml": "application/xml"}
 
 
 class SegmentCache:
@@ -85,9 +87,23 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._playlist(parts[1][:-5], head)
             if len(parts) == 3 and parts[0] == "seg":
                 return self._segment(parts[1], parts[2], head)
+            if len(parts) == 1 and parts[0] in DOCUMENTS:
+                return self._file(self.server.docs_dir, parts[0], DOCUMENTS[parts[0]], head)
+            if len(parts) == 2 and parts[0] == "images" and parts[1].endswith(".jpg") and set(parts[1][:-4]) <= KEY_CHARS:
+                return self._file(self.server.images_dir, parts[1], "image/jpeg", head)
         except (BrokenPipeError, ConnectionResetError):
             return
         self._send(404, b"Not found\n", head=head)
+
+    def _file(self, directory: Optional[str], name: str, content_type: str, head: bool):
+        if not directory:
+            return self._send(404, b"Not found\n", head=head)
+        try:
+            with open(os.path.join(directory, name), "rb") as f:
+                body = f.read()
+        except OSError:
+            return self._send(404, b"Not found\n", head=head)
+        self._send(200, body, content_type, head)
 
     def _channel(self, key: str) -> Optional[Channel]:
         return self.server.channels.get(key) if set(key) <= KEY_CHARS else None
@@ -125,13 +141,16 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class StreamProxy:
-    def __init__(self, host: str, port: int, public_url: str):
+    def __init__(self, host: str, port: int, public_url: str, docs_dir: Optional[str] = None,
+                 images_dir: Optional[str] = None):
         self.public_url = public_url.rstrip("/")
         self._server = ThreadingHTTPServer((host, port), _Handler)
         self._server.daemon_threads = True
         self._server.channels = {}
         self._server.segments = SegmentCache()
         self._server.public_url = self.public_url
+        self._server.docs_dir = docs_dir
+        self._server.images_dir = images_dir
         self._server.session = requests.Session()
         self._server.session.headers["User-Agent"] = USER_AGENT
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -147,6 +166,12 @@ class StreamProxy:
         """Serve a channel and return the playlist URL for players."""
         self._server.channels[key] = channel
         return self.stream_url(key)
+
+    def document_url(self, name: str) -> str:
+        return f"{self.public_url}/{name}"
+
+    def image_url(self, path: str) -> str:
+        return f"{self.public_url}/images/{os.path.basename(path)}"
 
     def stream_url(self, key: str) -> str:
         return f"{self.public_url}/stream/{key}.m3u8"

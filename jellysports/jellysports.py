@@ -147,7 +147,7 @@ class Collector:
         with open(os.path.join(self.docs, "jellysports.m3u"), "w", encoding="utf-8") as f:
             f.write("#EXTM3U\n")
             for ev in live:
-                logo = f' tvg-logo="{ev.image}"' if ev.image else ""
+                logo = f' tvg-logo="{self.proxy.image_url(ev.image)}"' if ev.image else ""
                 f.write(f'#EXTINF:-1 tvg-id="{ev.key}" tvg-language="English"{logo} group-title="{ev.sport}",{ev.title}\n')
                 f.write(f"{self.proxy.stream_url(ev.key)}\n")
 
@@ -158,7 +158,7 @@ class Collector:
             ch = ET.SubElement(root, "channel", id=ev.key)
             ET.SubElement(ch, "display-name").text = ev.title
             if ev.image:
-                ET.SubElement(ch, "icon", src=ev.image)
+                ET.SubElement(ch, "icon", src=self.proxy.image_url(ev.image))
         for ev in live:
             prog = ET.SubElement(root, "programme", start=ev.kickoff.strftime(fmt),
                                  stop=(ev.kickoff + PROGRAMME_LENGTH).strftime(fmt), channel=ev.key)
@@ -166,7 +166,7 @@ class Collector:
             ET.SubElement(prog, "category", lang="en").text = ev.sport
             ET.SubElement(prog, "category", lang="en").text = "sports"
             if ev.image:
-                ET.SubElement(prog, "icon", src=ev.image)
+                ET.SubElement(prog, "icon", src=self.proxy.image_url(ev.image))
         ET.ElementTree(root).write(os.path.join(self.docs, "jellysports.xml"), encoding="utf-8", xml_declaration=True)
 
 
@@ -180,9 +180,12 @@ def run(argv: list):
     header()
 
     public_url = args.public_url or f"http://localhost:{args.proxy_port}"
-    proxy = StreamProxy(args.proxy_host, args.proxy_port, public_url)
+    output = os.path.abspath(args.output)
+    proxy = StreamProxy(args.proxy_host, args.proxy_port, public_url,
+                        docs_dir=os.path.join(output, "docs"), images_dir=os.path.join(output, "images"))
     proxy.start()
     p(f"Stream proxy listening on {args.proxy_host}:{args.proxy_port}; playlists use {public_url}", colours.OKCYAN, otype.REGULAR)
+    p(f"Playlist: {proxy.document_url('jellysports.m3u')}   Guide: {proxy.document_url('jellysports.xml')}", colours.OKCYAN, otype.REGULAR)
 
     listing = ListingClient(args.site)
     collector = Collector(args, proxy, listing)

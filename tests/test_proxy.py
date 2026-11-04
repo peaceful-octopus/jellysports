@@ -1,4 +1,6 @@
+import os
 import socket
+import tempfile
 import unittest
 from unittest import mock
 import urllib.error
@@ -88,6 +90,40 @@ class ProxyTests(unittest.TestCase):
         self.proxy.register("abc123", FakeChannel(self.index))
         with mock.patch.object(proxy_mod, "download_segment", return_value=b"not a png"):
             self.assertEqual(get(f"{self.base}/seg/abc123/x-1.ts")[0], 502)
+
+
+class DocumentTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        docs, images = os.path.join(self.tmp.name, "docs"), os.path.join(self.tmp.name, "images")
+        os.makedirs(docs)
+        os.makedirs(images)
+        with open(os.path.join(docs, "jellysports.m3u"), "wb") as f:
+            f.write(b"#EXTM3U\n")
+        with open(os.path.join(images, "abc123.jpg"), "wb") as f:
+            f.write(b"jpeg")
+        port = free_port()
+        self.base = f"http://127.0.0.1:{port}"
+        self.proxy = proxy_mod.StreamProxy("127.0.0.1", port, self.base, docs_dir=docs, images_dir=images)
+        self.proxy.start()
+        self.addCleanup(self.proxy.stop)
+
+    def test_serves_playlist_file(self):
+        status, headers, body = get(f"{self.base}/jellysports.m3u")
+        self.assertEqual((status, body), (200, b"#EXTM3U\n"))
+
+    def test_missing_document_is_404(self):
+        self.assertEqual(get(f"{self.base}/jellysports.xml")[0], 404)
+
+    def test_serves_image(self):
+        status, headers, body = get(f"{self.base}/images/abc123.jpg")
+        self.assertEqual((status, headers["Content-Type"], body), (200, "image/jpeg", b"jpeg"))
+
+    def test_image_names_are_restricted(self):
+        self.assertEqual(get(f"{self.base}/images/..%2fdocs%2fjellysports.m3u")[0], 404)
+        self.assertEqual(get(f"{self.base}/images/abc123.png")[0], 404)
+        self.assertEqual(get(f"{self.base}/other.m3u")[0], 404)
 
 
 if __name__ == "__main__":

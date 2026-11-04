@@ -1,104 +1,79 @@
+"""Builds the thumbnail shown for each event in Jellyfin."""
 import os
-import sys
-from PIL import Image, ImageDraw
-import subprocess
-import hashlib
-from . import league_colours, pretty_print
-from dotenv import load_dotenv
-import requests
-load_dotenv()
+from typing import Optional
 
-NBA = "nba"
-NHL = "nhl"
-NFL = "nfl"
-EF = "English Football"
+from PIL import Image, ImageDraw, ImageFont
+
+from .logos import LogoCache
+from .pretty_print import *
+from .models import Event
+
+SIZE = 600
+DEFAULT_COLOUR = (45, 45, 55)
 
 
-def download_jpg(lp: list) -> list:
-    res = []
-    for lpi in lp:
-        if not os.path.isfile(lpi[0]):
-            try:
-                pretty_print.pind(f"Downloading {lpi[1]} to {lpi[0]}", pretty_print.colours.OKCYAN, pretty_print.otype.DEBUG)
-                r = requests.get(lpi[1], allow_redirects=True)
-                open(lpi[0], 'wb').write(r.content)
-                res.append(lpi[0])
-            except KeyboardInterrupt:
-                sys.exit()
-                pass
-            except Exception as e:
-                pretty_print.p(f"Error occurred attempting to download - {lpi[1]}", pretty_print.colours.FAIL, pretty_print.otype.ERROR, e)
-        else:
-            res.append(lpi[0])
-    return res
+def dominant_colour(img: Image.Image) -> tuple:
+    """Average colour of the logo's visible, non-white pixels, darkened so the logo stays readable."""
+    small = img.convert("RGBA").resize((24, 24))
+    px = [(r, g, b) for r, g, b, a in small.getdata() if a > 128 and not (r > 235 and g > 235 and b > 235)]
+    if not px:
+        return DEFAULT_COLOUR
+    n = len(px)
+    return tuple(int(sum(c[i] for c in px) / n * 0.7) for i in range(3))
 
 
-def concat_images(image_path_list: list, output: str, ht_name: str, at_name: str, league: str):
-    lc = league_colours.LeagueColours(league)
-    images = [Image.open(x).convert("RGBA") for x in image_path_list]
-    widths, heights = zip(*(i.size for i in images))
-    total_width = int(sum(widths) * 1.5)
-    max_height = int(max(heights) * 1.5)
-
-    if total_width > max_height:
-        max_height = total_width
-    else:
-        total_width = max_height
-    y_offset = int(max_height * 0.15)
-    x_offset = int(max_height * 0.1)
-    new_im = Image.new(mode='RGB', size=(total_width, max_height), color=(255, 255, 255, 0))
-    draw = ImageDraw.Draw(new_im)
-    points = {
-        "first": [
-            (int(total_width * 0.65), 0),
-            (int(total_width * 0.35), max_height),
-            (0, max_height),
-            (0, 0)
-        ],
-        "second": [
-            (total_width, 0),
-            (total_width, max_height),
-            (int(total_width * 0.35), max_height),
-            (int(total_width * 0.65), 0)
-        ]
-    }
-    draw.polygon(points['first'], lc.get_second(ht_name))
-    draw.polygon(points['second'], lc.get_second(at_name), lc.get_second(at_name))
-    for c, im in enumerate(images):
-        if c != 0:
-            y_offset = int(max_height - y_offset - im.height)
-            x_offset = int(total_width - im.width - x_offset)
-        new_im.paste(im, (x_offset, y_offset), im)
-    new_im.save(output, quality=100, subsampling=0)
+def _font(size: int):
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow < 10.1
+        return ImageFont.load_default()
 
 
-def generate_img(m, sport: str) -> str:
-    ht = m['home_team']
-    at = m['away_team']
-    output = os.environ.get("output")
-    location = str(hashlib.sha1((ht['name']+at['name']).encode()).hexdigest())
-    op = os.path.join(*[output, sport, f"{location}.jpg"])
-    op_sport = os.path.join(*[output, sport])
-    if not os.path.isfile(f"op"):
-        if not os.path.isdir(f"{output}"):
-            os.makedirs(f"{output}")
-            os.makedirs(f"{op_sport}")
-        elif not os.path.isdir(f"{op_sport}"):
-            os.makedirs(f"{op_sport}")
+def _fit_text(draw: ImageDraw.ImageDraw, text: str, max_width: int, size: int):
+    while size > 10:
+        font = _font(size)
+        if draw.textlength(text, font=font) <= max_width:
+            return font
+        size -= 2
+    return _font(10)
 
-        ht_p = (os.path.join(*[op_sport, f"{str(hashlib.sha1(ht['name'].encode()).hexdigest())}.png"]), ht['icon_url'])
-        at_p = (os.path.join(*[op_sport, f"{str(hashlib.sha1(at['name'].encode()).hexdigest())}.png"]), at['icon_url'])
-        list_im = download_jpg([ht_p, at_p])
-        if len(list_im) > 1:
-            try:
-                concat_images(list_im, op, ht['name'], at['name'], sport)
-            except KeyboardInterrupt:
-                sys.exit()
-                pass
-            except Exception as e:
-                pretty_print.p(f"Error building game icon", pretty_print.colours.FAIL, pretty_print.otype.ERROR, e)
-        elif len(list_im) == 1:
-            return list_im[0]
-        else:
-            return ""
-    return op
+
+def _logo(path: Optional[str]) -> Optional[Image.Image]:
+    if not path:
+        return None
+    try:
+        return Image.open(path).convert("RGBA")
+    except OSError:
+        return None
+
+
+def generate_img(event: Event, logos: LogoCache, out_dir: str) -> Optional[str]:
+    """Returns the path of the event image, creating it once. Events without team names get a text card."""
+    path = os.path.join(out_dir, f"{event.key}.jpg")
+    if os.path.isfile(path):
+        return path
+    home = _logo(logos.get(event.home_badge))
+    away = _logo(logos.get(event.away_badge))
+
+    left = dominant_colour(home) if home else DEFAULT_COLOUR
+    right = dominant_colour(away) if away else DEFAULT_COLOUR
+    img = Image.new("RGB", (SIZE, SIZE), left)
+    draw = ImageDraw.Draw(img)
+    draw.polygon([(int(SIZE * 0.65), 0), (SIZE, 0), (SIZE, SIZE), (int(SIZE * 0.35), SIZE)], fill=right)
+
+    box = int(SIZE * 0.34)
+    for logo, cx, cy in ((home, int(SIZE * 0.25), int(SIZE * 0.38)), (away, int(SIZE * 0.75), int(SIZE * 0.62))):
+        if logo:
+            logo.thumbnail((box, box))
+            img.paste(logo, (cx - logo.width // 2, cy - logo.height // 2), logo)
+
+    if not (home or away):
+        title_font = _fit_text(draw, event.title, SIZE - 60, 48)
+        draw.text((SIZE // 2, SIZE // 2), event.title, fill="white", font=title_font, anchor="mm")
+    caption = event.sport
+    league_font = _fit_text(draw, caption, SIZE - 60, 30)
+    draw.text((SIZE // 2, SIZE - 40), caption, fill=(235, 235, 235), font=league_font, anchor="mm")
+
+    os.makedirs(out_dir, exist_ok=True)
+    img.save(path, quality=90)
+    return path

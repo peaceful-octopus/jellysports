@@ -1,10 +1,5 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-verbosity = os.environ.get("verbosity")
-no_verbosity = os.environ.get("no_verbosity")
+import traceback
 
 
 class otype:
@@ -26,23 +21,24 @@ class colours:
 
 
 def check_verbosity(t: str = otype.DEBUG):
+    """Debug messages print only with -v; everything is silenced by quiet mode except errors."""
     verbosity = os.environ.get("verbosity")
     no_verbosity = os.environ.get("no_verbosity")
-    return (not(t == otype.DEBUG and verbosity == "1") and no_verbosity == "1") or t == otype.ERROR
+    return (not (t == otype.DEBUG and verbosity == "1") and no_verbosity == "1") or t == otype.ERROR
 
 
-def p(s: str, c: str = "", t: str = otype.DEBUG, err: Exception = None) -> str:
+def p(s, c: str = "", t: str = otype.DEBUG, err: Exception = None) -> None:
     if check_verbosity(t):
-        print(f"{c}[{t}]{colours.ENDC} {s}")
-    if err and verbosity == "0" and not no_verbosity == "0":
-        print(err.with_traceback())
+        print(f"{c}[{t}]{colours.ENDC} {s}", flush=True)
+    if err and os.environ.get("verbosity") == "0" and os.environ.get("no_verbosity") != "0":
+        traceback.print_exception(type(err), err, err.__traceback__)
 
 
-def pind(s: str, c: str = "", t: str = otype.DEBUG) -> str:
+def pind(s, c: str = "", t: str = otype.DEBUG) -> None:
     if check_verbosity(t):
-        print(f"{c}---> [{t}]{colours.ENDC} {s}")
+        print(f"{c}---> [{t}]{colours.ENDC} {s}", flush=True)
 
 
-def pind2(s: str, c: str = "", t: str = otype.DEBUG) -> str:
+def pind2(s, c: str = "", t: str = otype.DEBUG) -> None:
     if check_verbosity(t):
-        print(f"{c}------> [{t}]{colours.ENDC} {s}")
+        print(f"{c}------> [{t}]{colours.ENDC} {s}", flush=True)

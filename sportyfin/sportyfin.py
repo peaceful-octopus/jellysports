@@ -1,183 +1,205 @@
+import argparse
+import datetime
+import os
 import sys
 import time
-import xml.etree.cElementTree as ET
+import xml.etree.ElementTree as ET
+from typing import Dict, List, Optional
+
+from .util import game_info
+from .util.embedcenter import Channel, ChannelError, NotLive
+from .util.listing import DEFAULT_SITE, ListingClient, ListingError, matches_filter
+from .util.logos import LogoCache
+from .util.models import Event
 from .util.pretty_print import *
-from .util import scraping
-from dotenv import load_dotenv
+from .util.proxy import StreamProxy
 
-load_dotenv()
+VERSION = "2.0.0"
+UTC = datetime.timezone.utc
 
-NBA = "nba"
-NHL = "nhl"
-NFL = "nfl"
-EF = "English Football"
-leagues = []
-OUTPUT = os.path.join(os.getcwd(), "output")
-os.environ['output'] = OUTPUT
+# Typical broadcast length used for the XMLTV programme end.
+PROGRAMME_LENGTH = datetime.timedelta(hours=3)
+# How long after kickoff an event stays in the output and is still looked for.
+KEEP_AFTER_KICKOFF = datetime.timedelta(hours=5)
+LISTING_REFRESH = datetime.timedelta(minutes=5)
 
 
 def header():
     print()
-    print()
-    print(f"{colours.OKCYAN + colours.BOLD} ________  ________  ________  ________  _________    ___    ___ ________ ___  ________    ")
-    print(f"{colours.OKCYAN + colours.BOLD}|\   ____\|\   __  \|\   __  \|\   __  \|\___   ___\ |\  \  /  /|\  _____\\  \|\   ___  \    ")
-    print(f"{colours.OKCYAN + colours.BOLD}\ \  \___|\ \  \|\  \ \  \|\  \ \  \|\  \|___ \  \_| \ \  \/  / | \  \__/\ \  \ \  \\ \  \   ")
-    print(f"{colours.OKCYAN + colours.BOLD} \ \_____  \ \   ____\ \  \\\  \ \   _  _\   \ \  \   \ \    / / \ \   __\\ \  \ \  \\ \  \  ")
-    print(f"{colours.OKCYAN + colours.BOLD}  \|____|\  \ \  \___|\ \  \\\  \ \  \\  \|   \ \  \   \/  /  /   \ \  \_| \ \  \ \  \\ \  \ ")
-    print(f"{colours.OKCYAN + colours.BOLD}    ____\_\  \ \__\    \ \_______\ \__\\ _\    \ \__\__/  / /      \ \__\   \ \__\ \__\\ \__\ ")
-    print(f"{colours.OKCYAN + colours.BOLD}   |\_________\|__|     \|_______|\|__|\|__|    \|__|\___/ /        \|__|    \|__|\|__| \|__|")
-    print(f"{colours.OKCYAN + colours.BOLD}   \|_________|                                     \|___|/                                  ")
-    print()
-    print(f"{colours.OKGREEN}    Summary: Stream sports events straight from your Jellyfin server. Sportyfin allows users to scrape for ")
-    print(f"{colours.OKGREEN}             live streamed events and watch straight from Jellyfin. Sportyfin also generates meta-data that ")
-    print(f"{colours.OKGREEN}             is used in Jellyfin to provide a great viewing experience.")
-    print()
-    print(f"{colours.OKGREEN}    Author: Axel Mierczuk")
-    print(f"{colours.OKGREEN}    Version: 1.0.7")
-    print(f"{colours.OKGREEN}    Github: https://github.com/axelmierczuk/sportyfin")
-    print()
+    print(f"{colours.OKCYAN + colours.BOLD}SPORTYFIN {VERSION}{colours.ENDC}")
+    print(f"{colours.OKGREEN}Stream sports events straight from your Jellyfin server.")
+    print(f"{colours.OKGREEN}Author: Axel Mierczuk   Github: https://github.com/axelmierczuk/sportyfin{colours.ENDC}")
     print()
 
 
-# Main class
-class StreamCollector:
-    def __init__(self):
-        self.streaming_sites = {
-            NBA: scraping.find_streams(NBA) if NBA in leagues else [],
-            NHL: scraping.find_streams(NHL) if NHL in leagues else [],
-            NFL: scraping.find_streams(NFL) if NFL in leagues else [],
-            EF: scraping.find_streams(EF) if EF in leagues else [],
-        }
-        self.leagues: list = leagues
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="sportyfin", description="Collect live sports streams into m3u/XMLTV files for Jellyfin.")
+    ap.add_argument("command", nargs="?", choices=["run"], help="kept for compatibility with older invocations")
+    ap.add_argument("-o", "--output", default=os.path.join(os.getcwd(), "output"), help="output directory (default ./output)")
+    ap.add_argument("-l", "--league", action="append", default=[], metavar="TEXT",
+                    help="only events whose sport, league or title contains TEXT (repeatable, case-insensitive), e.g. nba, hockey, champions")
+    ap.add_argument("-a", "--all", action="store_true", help="all sports (default when no --league is given)")
+    ap.add_argument("-d", "--once", action="store_true", help="check every matching event once, ignoring kickoff times, then exit")
+    ap.add_argument("--lead", type=int, default=5, metavar="MIN", help="start checking an event this many minutes before kickoff (default 5)")
+    ap.add_argument("--window", type=int, default=15, metavar="MIN", help="keep checking for this many minutes after kickoff (default 15)")
+    ap.add_argument("--interval", type=int, default=30, metavar="SEC", help="seconds between checks (default 30)")
+    ap.add_argument("--site", default=DEFAULT_SITE, help=f"listing site (default {DEFAULT_SITE})")
+    ap.add_argument("--proxy-host", default="127.0.0.1", help="interface the stream proxy listens on (use 0.0.0.0 to serve other machines)")
+    ap.add_argument("--proxy-port", type=int, default=8099)
+    ap.add_argument("--public-url", help="base URL players use to reach the proxy (default http://localhost:<proxy-port>)")
+    ap.add_argument("-v", "--verbose", action="store_true", help="show debug output")
+    ap.add_argument("-q", "--quiet", action="store_true", help="only show errors")
+    return ap
 
-    def collect(self) -> None:
 
-        for lg in self.leagues:
-            p(f"COLLECTING {lg.upper()} .M3U8 LINKS", colours.HEADER, otype.REGULAR)
-            res = 0
-            for match in self.streaming_sites[lg]:
-                p(f"Looking for {match['match']['name']} streams:", colours.WARNING, otype.REGULAR)
-                match['match']['m3u8_urls'] = scraping.get_streams(match['match']['url'])
-                res += len(match['match']['m3u8_urls'])
-            if res == 0:
-                p(f"COULD NOT FIND {lg.upper()} M3U8 LINKS", colours.FAIL, otype.REGULAR)
+class Collector:
+    def __init__(self, args, proxy: StreamProxy, listing: ListingClient):
+        self.args = args
+        self.proxy = proxy
+        self.listing = listing
+        self.output = os.path.abspath(args.output)
+        self.docs = os.path.join(self.output, "docs")
+        self.images = os.path.join(self.output, "images")
+        self.logos = LogoCache(os.path.join(self.output, "logos"))
+        self.events: Dict[str, Event] = {}
+        self.channels: Dict[str, Channel] = {}
+        self.last_listing: Optional[datetime.datetime] = None
 
-    def generate_xmltv(self, lg: str):
+    def refresh_listing(self, now: datetime.datetime):
+        p("COLLECTING EVENT LISTING", colours.HEADER, otype.REGULAR)
+        try:
+            found = [e for e in self.listing.fetch() if matches_filter(e, self.args.league)]
+        except ListingError as e:
+            p(f"Could not load the event listing: {e}", colours.FAIL, otype.ERROR)
+            return
+        self.last_listing = now
+        for ev in found:
+            known = self.events.get(ev.key)
+            if known:
+                known.kickoff, known.live = ev.kickoff, ev.live
+                continue
+            self.events[ev.key] = ev
+            p(f"Found - {ev.title} ({ev.sport}, {ev.kickoff.strftime('%Y-%m-%d %H:%M UTC')})", colours.OKGREEN, otype.REGULAR)
+        if not found:
+            p("No matching events listed", colours.WARNING, otype.REGULAR)
+
+    def _due(self, ev: Event, now: datetime.datetime) -> bool:
+        if ev.ready:
+            return False
+        if self.args.once:
+            return True
+        if now > ev.kickoff + KEEP_AFTER_KICKOFF:
+            return False
+        if ev.live:  # the site says it is on air
+            return True
+        return ev.kickoff - datetime.timedelta(minutes=self.args.lead) <= now <= ev.kickoff + datetime.timedelta(minutes=self.args.window)
+
+    def poll(self, now: datetime.datetime) -> bool:
+        """Look for working streams on every event that is due. Returns True if the output changed."""
+        changed = False
+        for ev in self.events.values():
+            if not self._due(ev, now):
+                continue
+            ev.attempts += 1
+            channel = self.channels.setdefault(ev.key, Channel(ev.embed_url))
+            p(f"Checking {ev.title}", colours.WARNING, otype.REGULAR)
+            try:
+                channel.index(max_age=0)
+            except NotLive:
+                pind2("Not live yet", colours.WARNING, otype.DEBUG)
+                continue
+            except ChannelError as e:
+                pind2(f"Not available: {e}", colours.WARNING, otype.DEBUG)
+                continue
+            self.proxy.register(ev.key, channel)
+            ev.ready = True
+            ev.image = self._image(ev)
+            pind2(f"Stream is live - {self.proxy.stream_url(ev.key)}", colours.OKGREEN, otype.REGULAR)
+            changed = True
+        # Forget events long after kickoff.
+        expired = [k for k, e in self.events.items() if now > e.kickoff + KEEP_AFTER_KICKOFF]
+        for key in expired:
+            changed = changed or self.events[key].ready
+            del self.events[key]
+            self.channels.pop(key, None)
+        return changed
+
+    def _image(self, ev: Event) -> Optional[str]:
+        try:
+            return game_info.generate_img(ev, self.logos, self.images)
+        except Exception as e:
+            p(f"Could not build image for {ev.title}", colours.FAIL, otype.ERROR, e)
+            return None
+
+    # Output ------------------------------------------------------------------------------------
+
+    def _live(self) -> List[Event]:
+        return sorted((e for e in self.events.values() if e.ready), key=lambda e: (e.kickoff, e.title))
+
+    def write(self):
+        os.makedirs(self.docs, exist_ok=True)
+        live = self._live()
+        p(f"Writing {len(live)} channel(s)", colours.HEADER, otype.REGULAR)
+        self._write_m3u(live)
+        self._write_xmltv(live)
+
+    def _write_m3u(self, live: List[Event]):
+        with open(os.path.join(self.docs, "sportyfin.m3u"), "w", encoding="utf-8") as f:
+            f.write("#EXTM3U\n")
+            for ev in live:
+                logo = f' tvg-logo="{ev.image}"' if ev.image else ""
+                f.write(f'#EXTINF:-1 tvg-id="{ev.key}" tvg-language="English"{logo} group-title="{ev.sport}",{ev.title}\n')
+                f.write(f"{self.proxy.stream_url(ev.key)}\n")
+
+    def _write_xmltv(self, live: List[Event]):
+        fmt = "%Y%m%d%H%M%S +0000"
         root = ET.Element("tv")
-        for match in self.streaming_sites[lg]:
-            for url in match['match']['m3u8_urls']:
-                doc = ET.SubElement(root, "channel", id=str(url))
-                ET.SubElement(doc, "display-name").text = match['match']['name']
-                ET.SubElement(doc, "icon").text = f"{OUTPUT}/{lg}/{match['match']['img_location'].split('/')[-1]}"
-
-                doc_p = ET.SubElement(root, "programme", start=match['match']['start'], stop=match['match']['stop'], channel=str(url))
-                ET.SubElement(doc_p, "title", lang="en").text = match['match']['name']
-                ET.SubElement(doc_p, "category", lang="en").text = "sports"
-                audio = ET.Element("audio")
-                doc_p.append(audio)
-                ET.SubElement(audio, "stereo").text = "stereo"
-                ET.SubElement(doc_p, "icon", src=f"{OUTPUT}/{lg}/{match['match']['img_location'].split('/')[-1]}")
-        tree = ET.ElementTree(root)
-        outp = os.path.join(OUTPUT, f"docs")
-        if not os.path.isdir(f"{OUTPUT}"):
-            os.makedirs(f"{OUTPUT}")
-            os.makedirs(f"{outp}")
-        elif not os.path.isdir(f"{outp}"):
-            os.makedirs(f"{outp}")
-        output_path = os.path.join(outp, f"{lg}.xml")
-        tree.write(output_path)
-
-    def generate_m3u(self, lg: str):
-        with open(os.path.join(*[OUTPUT, "docs", f"{lg}.m3u"]), 'w') as file:
-            file.write("#EXTM3U\n")
-            for match in self.streaming_sites[lg]:
-                for url in match['match']['m3u8_urls']:
-                    file.write(f"""#EXTINF:-1 tvg-id="{url}" tvg-country="USA" tvg-language="English" tvg-logo="{os.path.join(*[OUTPUT, lg, match['match']['img_location'].split('/')[-1]])}" group-title="{lg}",{match['match']['name']}\n""")
-                    file.write(f"""{url}\n""")
-
-    def generate_docs(self):
-        for lg in self.leagues:
-            p(f"Generating XML channel data for {lg.upper()}", colours.HEADER, otype.REGULAR)
-            self.generate_xmltv(lg)
-            p(f"Generating m3u playlist data for {lg.upper()}", colours.HEADER, otype.REGULAR)
-            self.generate_m3u(lg)
+        for ev in live:
+            ch = ET.SubElement(root, "channel", id=ev.key)
+            ET.SubElement(ch, "display-name").text = ev.title
+            if ev.image:
+                ET.SubElement(ch, "icon", src=ev.image)
+        for ev in live:
+            prog = ET.SubElement(root, "programme", start=ev.kickoff.strftime(fmt),
+                                 stop=(ev.kickoff + PROGRAMME_LENGTH).strftime(fmt), channel=ev.key)
+            ET.SubElement(prog, "title", lang="en").text = ev.title
+            ET.SubElement(prog, "category", lang="en").text = ev.sport
+            ET.SubElement(prog, "category", lang="en").text = "sports"
+            if ev.image:
+                ET.SubElement(prog, "icon", src=ev.image)
+        ET.ElementTree(root).write(os.path.join(self.docs, "sportyfin.xml"), encoding="utf-8", xml_declaration=True)
 
 
 def run(argv: list):
-    global OUTPUT
-    minutes = 30
+    args = build_parser().parse_args(argv[1:])
+    if args.all and args.league:
+        p("Cannot pass -a/--all together with --league", colours.FAIL, otype.ERROR)
+        sys.exit(2)
+    os.environ["verbosity"] = "0" if args.verbose else "1"
+    os.environ["no_verbosity"] = "0" if args.quiet else "1"
+    header()
+
+    public_url = args.public_url or f"http://localhost:{args.proxy_port}"
+    proxy = StreamProxy(args.proxy_host, args.proxy_port, public_url)
+    proxy.start()
+    p(f"Stream proxy listening on {args.proxy_host}:{args.proxy_port}; playlists use {public_url}", colours.OKCYAN, otype.REGULAR)
+
+    listing = ListingClient(args.site)
+    collector = Collector(args, proxy, listing)
     try:
-        os.environ['stream_link'] = "https://sportscentral.io"
-        if "-v" in argv:
-            os.environ["verbosity"] = "0"
-        else:
-            os.environ["verbosity"] = "1"
-        if "-vv" in argv:
-            os.environ["no_verbosity"] = "0"
-        else:
-            os.environ["no_verbosity"] = "1"
-        if "-s" in argv:
-            os.environ["selenium"] = "0"
-        else:
-            os.environ["selenium"] = "1"
-        if "-nba" in argv:
-            leagues.append(NBA)
-        if "-nhl" in argv:
-            leagues.append(NHL)
-        if "-nfl" in argv:
-            leagues.append(NFL)
-        if "-ef" in argv:
-            leagues.append(EF)
-        if "-a" in argv and len(leagues) == 0:
-            leagues.append(NBA)
-            leagues.append(NHL)
-            leagues.append(NFL)
-            leagues.append(EF)
-        elif "-a" in argv and len(leagues) != 0:
-            p("Cannot pass -a with -nba/-nfl/-nhl/-ef", colours.FAIL, otype.ERROR)
-            sys.exit()
-        if "-t" in argv:
-            try:
-                if argv.index("-t") + 1 >= len(argv):
-                    raise Exception("Missing time input (in minutes)")
-                minutes = argv[argv.index("-t") + 1]
-                if minutes.startswith("-"):
-                    raise Exception("Missing time input (in minutes)")
-            except Exception as e:
-                p(e, colours.FAIL, otype.ERROR)
-        if "-o" in argv:
-            try:
-                if argv.index("-o") + 1 >= len(argv):
-                    raise Exception("Missing output location")
-                dp = str(argv[argv.index("-o") + 1])
-                OUTPUT = os.path.join(*[dp, "output"])
-                if dp.startswith('~') and os.name == 'nt':
-                    OUTPUT = os.path.join(os.path.expandvars("%userprofile%"), dp[2:])
-                elif not dp.startswith('/') and not dp.startswith('~'):
-                    if dp.startswith('.'):
-                        OUTPUT = os.path.join(*[os.getcwd(), dp[2:], "output"])
-                    else:
-                        OUTPUT = os.path.join(*[os.getcwd(), dp, "output"])
-                if OUTPUT.startswith("-"):
-                    raise Exception("Missing output location")
-                os.environ['output'] = OUTPUT
-            except Exception as e:
-                p(e, colours.FAIL, otype.ERROR)
-                sys.exit()
-        if len(leagues) == 0:
-            sys.exit()
-        header()
-        if "-d" in argv:
-            collector = StreamCollector()
-            collector.collect()
-            collector.generate_docs()
-        else:
-            while True:
-                collector = StreamCollector()
-                collector.collect()
-                collector.generate_docs()
-                p(f"Waiting {minutes} minutes until next update", colours.WARNING, otype.REGULAR)
-                del collector
-                time.sleep(int(int(minutes) * 60))
-    except Exception as e:
-        p(e, colours.FAIL, otype.ERROR, e)
+        while True:
+            now = datetime.datetime.now(UTC)
+            if collector.last_listing is None or now - collector.last_listing >= LISTING_REFRESH:
+                collector.refresh_listing(now)
+            if collector.poll(now) or not os.path.isfile(os.path.join(collector.docs, "sportyfin.m3u")):
+                collector.write()
+            if args.once:
+                break
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        listing.close()
+        if args.once:
+            p(f"Done. Output is in {collector.output}. The proxy stops now; run without --once to serve streams.", colours.OKGREEN, otype.REGULAR)
+        proxy.stop()

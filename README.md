@@ -1,81 +1,75 @@
-# *`NO LONGER MAINTAINED`*
-
 # Sportyfin
 
 ### **For Educational Purposes Only**
 
 ## Description
 
-Stream sports events straight from your Jellyfin server. Sportyfin allows users to scrape for live
-streamed events and watch straight from Jellyfin. Sportyfin also generates meta-data that is used
-in Jellyfin to provide a great viewing experience.
+Stream sports events straight from your Jellyfin server. Sportyfin reads the live schedule from
+[gostreameast.one](https://gostreameast.one), checks which events are on air, and writes an `.m3u` playlist and an
+XMLTV guide that Jellyfin's Live TV can use. Team logos are downloaded once and cached, and used to build a thumbnail
+for each event.
 
-Currently, Sportyfin supports NBA, NHL, NFL and Premier League livestreams, but we plan to support other leagues in the future.
+Sportyfin covers every sport the source lists (NBA, NFL, NHL, soccer, college sports, and more). Streams are only
+available around game time, so Sportyfin checks each event from a few minutes before kickoff, then keeps retrying
+for a while after it.
 
+Video is served through a small local proxy built into Sportyfin. Jellyfin plays
+`http://<host>:8099/stream/<id>.m3u8`; the proxy rebuilds the HLS playlist and converts the source's image-based
+segments into regular MPEG-TS on request. Nothing is fetched from the source for a channel nobody is watching.
+
+## Requirements
+
+- Python 3.9 or newer
+- Google Chrome or Chromium (used only to read the event listing)
+- ffmpeg is not required by Sportyfin itself, but Jellyfin needs it to play the streams
 
 ## Installation
 
 ### Pip
 
-To install Sportyfin with pip, follow the steps bellow:
-
-
 ```bash
-pip install sportyfin --no-binary=sportyfin
+git clone https://github.com/axelmierczuk/sportyfin.git
+cd sportyfin
+pip install .
 ```
 
-
 ### Docker
-
-To install Sportyfin with Docker, follow the steps bellow:
 
 ```bash
 git clone https://github.com/axelmierczuk/sportyfin.git
 cd sportyfin
 docker build --tag sportyfin .
-docker run -v <Path Where You Want Output>:/sportyfin/output sportyfin 
-
-# For example: docker run -v ~/Desktop:/sportyfin/output sportyfin 
-# You can edit the paramaters that sportyfin runs with from the Dockerfile
+docker run -p 8099:8099 -v <Path Where You Want Output>:/sportyfin/output sportyfin     python3 -m sportyfin run -a -o /sportyfin/output --proxy-host 0.0.0.0 --public-url http://<this machine's address>:8099
 ```
 
-_OR_ you may pull the container with the following:
-
-```bash
-docker pull sportyfin/sportyfin:latest 
-docker run -v <Path Where You Want Output>:/sportyfin/output sportyfin/sportyfin:latest
-
-# You CANNOT edit the paramaters that sportyfin runs with when pulling the image
-```
+`--public-url` must be an address your Jellyfin server can reach, because it is written into the playlist.
 
 ## Usage
 
-We highly recommend running Sportyfin in combination with [tmux](https://man7.org/linux/man-pages/man1/tmux.1.html), or something similar.
-
-Example usage:
+Start the service and leave it running (tmux or a similar tool is recommended):
 
 ```bash
-python3 -m sportyfin <arguments>
+python3 -m sportyfin run -o ~/sportyfin-output
 ```
 
-Start the sportyfin server as follows:
-```bash
-# -nba specifies finding streams for the NBA
-# -s allows sportyfin to use Selenium to scrape
-# -v enables verbose mode
-# -o enables selecting output location
+Useful options:
 
-python3 -m sportyfin -nba -s -v -o ~/Desktop
-```
+| Option | Meaning |
+|---|---|
+| `-l`, `--league TEXT` | Only events whose sport, league or title contains `TEXT` (repeatable), e.g. `-l nba -l hockey` |
+| `-a`, `--all` | All sports (the default) |
+| `-d`, `--once` | Check every matching event once, ignoring kickoff times, then exit |
+| `--lead MIN` / `--window MIN` | Start checking this many minutes before kickoff (5) / keep checking this long after (15) |
+| `--interval SEC` | Seconds between checks (30) |
+| `--proxy-host`, `--proxy-port` | Where the stream proxy listens (default `127.0.0.1:8099`; use `0.0.0.0` to serve other machines) |
+| `--public-url URL` | Address players use to reach the proxy (default `http://localhost:8099`) |
+| `--site URL` | Listing site, in case the domain changes |
+| `-v` / `-q` | Verbose / errors only |
 
-```bash
-# -vv specifies silent mode (no output will be produced)
-# -a specifies all leagues supported by sportyfin
+The playlist and guide are written to `<output>/docs/sportyfin.m3u` and `<output>/docs/sportyfin.xml`. An event
+appears there once a working stream is found and is removed several hours after kickoff.
 
-python3 -m sportyfin -a -vv
-```
-
-**See the full list of arguments [here](https://sportyfin-doc.readthedocs.io/en/latest/usage.html#installation).**
+Chrome is located automatically. Set `CHROME_BIN` and `CHROMEDRIVER` to use a specific browser and driver.
 
 Once you have run the program, make sure to link to the .m3u's in the Jellyfin dashboard:
 
@@ -100,10 +94,8 @@ Once the path has been defined and the settings have been updated, you can check
 
 !['Dashboard'](https://i.ibb.co/yS5ycS6/Screen-Shot-2022-01-11-at-11-08-08-AM.png)
 
-## Documentation
+## Tests
 
-Find all the documentation [here](https://sportyfin-doc.readthedocs.io/en/latest/index.html).
-
-## Future Improvement
-
-Add server functionality, aka, ability to access streams (m3u files) from HTTP server.
+```bash
+python3 -m unittest discover -s tests -t .
+```

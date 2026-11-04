@@ -1,12 +1,6 @@
-# __init__.py
-"""
-pyexample.
+"""Sportyfin: collect live sports streams into m3u/XMLTV files for Jellyfin."""
 
-An example python library.
-"""
-
-__version__ = "0.1.0"
-__author__ = 'Stephen Hudson'
-__credits__ = 'Argonne National Laboratory'
+__version__ = "2.0.0"
+__author__ = 'Axel Mierczuk'
 
 from .sportyfin import *

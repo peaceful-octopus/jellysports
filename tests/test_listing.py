@@ -1,7 +1,7 @@
 import datetime
 import unittest
 
-from sportyfin.util.listing import matches_filter, parse_matches
+from jellysports.util.listing import matches_filter, parse_matches
 
 
 def match(**kw):

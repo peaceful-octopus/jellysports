@@ -4,8 +4,8 @@ from unittest import mock
 import urllib.error
 import urllib.request
 
-from sportyfin.util import embedcenter as ec
-from sportyfin.util import proxy as proxy_mod
+from jellysports.util import embedcenter as ec
+from jellysports.util import proxy as proxy_mod
 from tests.test_embedcenter import make_index, make_png, make_ts, seg
 
 

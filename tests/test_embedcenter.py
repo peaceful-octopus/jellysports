@@ -5,7 +5,7 @@ import unittest
 
 from PIL import Image
 
-from sportyfin.util import embedcenter as ec
+from jellysports.util import embedcenter as ec
 
 
 def make_ts(packets=4):

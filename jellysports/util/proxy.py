@@ -57,7 +57,7 @@ def download_segment(url: str, session: requests.Session) -> bytes:
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "sportyfin-proxy"
+    server_version = "jellysports-proxy"
 
     def log_message(self, fmt, *args):
         pind2(fmt % args, colours.OKCYAN, otype.DEBUG)

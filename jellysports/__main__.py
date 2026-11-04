@@ -1,5 +1,5 @@
 import sys
 
 if __name__ == "__main__":
-    import sportyfin.sportyfin as sf
+    import jellysports.jellysports as sf
     sf.run(sys.argv)

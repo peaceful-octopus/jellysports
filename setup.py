@@ -1,13 +1,12 @@
 from setuptools import setup
 
 setup(
-    name='sportyfin',
+    name='jellysports',
     version='2.0.0',
-    author='Axel Mierczuk',
-    author_email='axelmierczuk@gmail.com',
-    packages=['sportyfin', 'sportyfin.util'],
+    author='Joel Kreisel',
+    packages=['jellysports', 'jellysports.util'],
     include_package_data=True,
-    url='https://github.com/axelmierczuk/sportyfin',
+    url='https://github.com/peaceful-octopus/jellysports',
     license='MIT',
     description='Collects live sports streams into m3u/XMLTV files for Jellyfin.',
     long_description=open('README.md', encoding='utf-8').read(),

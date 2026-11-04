@@ -26,14 +26,14 @@ LISTING_REFRESH = datetime.timedelta(minutes=5)
 
 def header():
     print()
-    print(f"{colours.OKCYAN + colours.BOLD}SPORTYFIN {VERSION}{colours.ENDC}")
+    print(f"{colours.OKCYAN + colours.BOLD}JELLYSPORTS {VERSION}{colours.ENDC}")
     print(f"{colours.OKGREEN}Stream sports events straight from your Jellyfin server.")
-    print(f"{colours.OKGREEN}Author: Axel Mierczuk   Github: https://github.com/axelmierczuk/sportyfin{colours.ENDC}")
+    print(f"{colours.OKGREEN}Based on Sportyfin by Axel Mierczuk   Github: https://github.com/peaceful-octopus/jellysports{colours.ENDC}")
     print()
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="sportyfin", description="Collect live sports streams into m3u/XMLTV files for Jellyfin.")
+    ap = argparse.ArgumentParser(prog="jellysports", description="Collect live sports streams into m3u/XMLTV files for Jellyfin.")
     ap.add_argument("command", nargs="?", choices=["run"], help="kept for compatibility with older invocations")
     ap.add_argument("-o", "--output", default=os.path.join(os.getcwd(), "output"), help="output directory (default ./output)")
     ap.add_argument("-l", "--league", action="append", default=[], metavar="TEXT",
@@ -144,7 +144,7 @@ class Collector:
         self._write_xmltv(live)
 
     def _write_m3u(self, live: List[Event]):
-        with open(os.path.join(self.docs, "sportyfin.m3u"), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.docs, "jellysports.m3u"), "w", encoding="utf-8") as f:
             f.write("#EXTM3U\n")
             for ev in live:
                 logo = f' tvg-logo="{ev.image}"' if ev.image else ""
@@ -167,7 +167,7 @@ class Collector:
             ET.SubElement(prog, "category", lang="en").text = "sports"
             if ev.image:
                 ET.SubElement(prog, "icon", src=ev.image)
-        ET.ElementTree(root).write(os.path.join(self.docs, "sportyfin.xml"), encoding="utf-8", xml_declaration=True)
+        ET.ElementTree(root).write(os.path.join(self.docs, "jellysports.xml"), encoding="utf-8", xml_declaration=True)
 
 
 def run(argv: list):
@@ -191,7 +191,7 @@ def run(argv: list):
             now = datetime.datetime.now(UTC)
             if collector.last_listing is None or now - collector.last_listing >= LISTING_REFRESH:
                 collector.refresh_listing(now)
-            if collector.poll(now) or not os.path.isfile(os.path.join(collector.docs, "sportyfin.m3u")):
+            if collector.poll(now) or not os.path.isfile(os.path.join(collector.docs, "jellysports.m3u")):
                 collector.write()
             if args.once:
                 break

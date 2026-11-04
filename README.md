@@ -1,19 +1,19 @@
-# Sportyfin
+# Jellysports
 
 ### **For Educational Purposes Only**
 
 ## Description
 
-Stream sports events straight from your Jellyfin server. Sportyfin reads the live schedule from
+Stream sports events straight from your Jellyfin server. Jellysports reads the live schedule from
 [gostreameast.one](https://gostreameast.one), checks which events are on air, and writes an `.m3u` playlist and an
 XMLTV guide that Jellyfin's Live TV can use. Team logos are downloaded once and cached, and used to build a thumbnail
 for each event.
 
-Sportyfin covers every sport the source lists (NBA, NFL, NHL, soccer, college sports, and more). Streams are only
-available around game time, so Sportyfin checks each event from a few minutes before kickoff, then keeps retrying
+Jellysports covers every sport the source lists (NBA, NFL, NHL, soccer, college sports, and more). Streams are only
+available around game time, so Jellysports checks each event from a few minutes before kickoff, then keeps retrying
 for a while after it.
 
-Video is served through a small local proxy built into Sportyfin. Jellyfin plays
+Video is served through a small local proxy built into Jellysports. Jellyfin plays
 `http://<host>:8099/stream/<id>.m3u8`; the proxy rebuilds the HLS playlist and converts the source's image-based
 segments into regular MPEG-TS on request. Nothing is fetched from the source for a channel nobody is watching.
 
@@ -21,25 +21,25 @@ segments into regular MPEG-TS on request. Nothing is fetched from the source for
 
 - Python 3.9 or newer
 - Google Chrome or Chromium (used only to read the event listing)
-- ffmpeg is not required by Sportyfin itself, but Jellyfin needs it to play the streams
+- ffmpeg is not required by Jellysports itself, but Jellyfin needs it to play the streams
 
 ## Installation
 
 ### Pip
 
 ```bash
-git clone https://github.com/axelmierczuk/sportyfin.git
-cd sportyfin
+git clone https://github.com/peaceful-octopus/jellysports.git
+cd jellysports
 pip install .
 ```
 
 ### Docker
 
 ```bash
-git clone https://github.com/axelmierczuk/sportyfin.git
-cd sportyfin
-docker build --tag sportyfin .
-docker run -p 8099:8099 -v <Path Where You Want Output>:/sportyfin/output sportyfin     python3 -m sportyfin run -a -o /sportyfin/output --proxy-host 0.0.0.0 --public-url http://<this machine's address>:8099
+git clone https://github.com/peaceful-octopus/jellysports.git
+cd jellysports
+docker build --tag jellysports .
+docker run -p 8099:8099 -v <Path Where You Want Output>:/jellysports/output jellysports     python3 -m jellysports run -a -o /jellysports/output --proxy-host 0.0.0.0 --public-url http://<this machine's address>:8099
 ```
 
 `--public-url` must be an address your Jellyfin server can reach, because it is written into the playlist.
@@ -49,7 +49,7 @@ docker run -p 8099:8099 -v <Path Where You Want Output>:/sportyfin/output sporty
 Start the service and leave it running (tmux or a similar tool is recommended):
 
 ```bash
-python3 -m sportyfin run -o ~/sportyfin-output
+python3 -m jellysports run -o ~/jellysports-output
 ```
 
 Useful options:
@@ -66,7 +66,7 @@ Useful options:
 | `--site URL` | Listing site, in case the domain changes |
 | `-v` / `-q` | Verbose / errors only |
 
-The playlist and guide are written to `<output>/docs/sportyfin.m3u` and `<output>/docs/sportyfin.xml`. An event
+The playlist and guide are written to `<output>/docs/jellysports.m3u` and `<output>/docs/jellysports.xml`. An event
 appears there once a working stream is found and is removed several hours after kickoff.
 
 Chrome is located automatically. Set `CHROME_BIN` and `CHROMEDRIVER` to use a specific browser and driver.
@@ -99,3 +99,10 @@ Once the path has been defined and the settings have been updated, you can check
 ```bash
 python3 -m unittest discover -s tests -t .
 ```
+
+## Acknowledgements
+
+Jellysports is a fork of [Sportyfin](https://github.com/axelmierczuk/sportyfin) by Axel Mierczuk, released under the
+MIT License. The original project is archived. The command-line structure, m3u/XMLTV output and event image generation
+come from that project; the event source, stream handling and proxy were rewritten for this fork. See `LICENSE` for the
+copyright notices.

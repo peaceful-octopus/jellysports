@@ -44,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("-d", "--once", action="store_true", help="check every matching event once, ignoring kickoff times, then exit")
     ap.add_argument("--lead", type=int, default=5, metavar="MIN", help="start checking an event this many minutes before kickoff (default 5)")
     ap.add_argument("--window", type=int, default=15, metavar="MIN", help="keep checking for this many minutes after kickoff (default 15)")
+    ap.add_argument("--horizon", type=int, default=24, metavar="HOURS",
+                    help="list events this many hours before kickoff, before their stream exists (default 24)")
     ap.add_argument("--interval", type=int, default=30, metavar="SEC", help="seconds between checks (default 30)")
     ap.add_argument("-n", "--channel-number", type=int, metavar="N",
                     help="major channel number; channels are numbered N.1, N.2, ... in kickoff order (default: no numbers)")
@@ -68,6 +70,7 @@ class Collector:
         self.events: Dict[str, Event] = {}
         self.channels: Dict[str, Channel] = {}
         self.last_listing: Optional[datetime.datetime] = None
+        self.written: Optional[tuple] = None  # keys of the channels in the files on disk
 
     def refresh_listing(self, now: datetime.datetime):
         p("COLLECTING EVENT LISTING", colours.HEADER, otype.REGULAR)
@@ -83,6 +86,8 @@ class Collector:
                 known.kickoff, known.live = ev.kickoff, ev.live
                 continue
             self.events[ev.key] = ev
+            self.channels[ev.key] = Channel(ev.embed_url)
+            self.proxy.register(ev.key, self.channels[ev.key])  # playable as soon as the stream starts
             p(f"Found - {ev.title} ({ev.sport}, {ev.kickoff.strftime('%Y-%m-%d %H:%M UTC')})", colours.OKGREEN, otype.REGULAR)
         if not found:
             p("No matching events listed", colours.WARNING, otype.REGULAR)
@@ -99,41 +104,34 @@ class Collector:
             return True
         return ev.kickoff - datetime.timedelta(minutes=self.args.lead) <= now <= ev.kickoff + datetime.timedelta(minutes=self.args.window)
 
-    def poll(self, now: datetime.datetime) -> bool:
-        """Look for working streams on every event that is due. Returns True if the output changed."""
-        changed = False
+    def poll(self, now: datetime.datetime):
+        """Look for working streams on every event that is due."""
         for ev in self.events.values():
             if not self._due(ev, now):
                 continue
             ev.attempts += 1
             ev.checked_at = now
-            channel = self.channels.setdefault(ev.key, Channel(ev.embed_url))
+            channel = self.channels[ev.key]
             p(f"Checking {ev.title}", colours.WARNING, otype.REGULAR)
             try:
                 channel.index(max_age=0)
                 channel.playlist(lambda sid: sid)  # the index must also yield a playable playlist
             except NotLive:
                 pind2("Not live" if not ev.ready else "Stream went off air, removing channel", colours.WARNING, otype.DEBUG)
-                if ev.ready:
-                    ev.ready, changed = False, True
+                ev.ready = False
                 continue
             except ChannelError as e:
                 pind2(f"Not available: {e}", colours.WARNING, otype.DEBUG)
                 continue
             if ev.ready:
                 continue
-            self.proxy.register(ev.key, channel)
-            ev.ready = True
-            ev.image = self._image(ev)
+            ev.ready = ev.was_live = True
             pind2(f"Stream is live - {self.proxy.stream_url(ev.key)}", colours.OKGREEN, otype.REGULAR)
-            changed = True
         # Forget events long after kickoff.
         expired = [k for k, e in self.events.items() if now > e.kickoff + KEEP_AFTER_KICKOFF]
         for key in expired:
-            changed = changed or self.events[key].ready
             del self.events[key]
             self.channels.pop(key, None)
-        return changed
 
     def _image(self, ev: Event) -> Optional[str]:
         try:
@@ -144,15 +142,36 @@ class Collector:
 
     # Output ------------------------------------------------------------------------------------
 
-    def _live(self) -> List[Event]:
-        return sorted((e for e in self.events.values() if e.ready), key=lambda e: (e.kickoff, e.title))
+    def _listed(self, ev: Event, now: datetime.datetime) -> bool:
+        """Whether the event belongs in the output.
 
-    def write(self):
+        Jellyfin refreshes its guide rarely, so an upcoming event is listed before its stream exists; the
+        proxy serves it once the stream starts. An event that never came up within the window after kickoff,
+        or that went off air after being live, is dropped.
+        """
+        if ev.ready:
+            return True
+        if self.args.once or ev.was_live:
+            return False
+        window = datetime.timedelta(minutes=self.args.window)
+        return now - ev.kickoff <= window and ev.kickoff - now <= datetime.timedelta(hours=self.args.horizon)
+
+    def listed(self, now: datetime.datetime) -> List[Event]:
+        return sorted((e for e in self.events.values() if self._listed(e, now)), key=lambda e: (e.kickoff, e.title))
+
+    def needs_write(self, now: datetime.datetime) -> bool:
+        return self.written != tuple(e.key for e in self.listed(now))
+
+    def write(self, now: datetime.datetime):
         os.makedirs(self.docs, exist_ok=True)
-        live = self._live()
+        live = self.listed(now)
+        for ev in live:
+            if ev.image is None and not ev.image_tried:
+                ev.image_tried, ev.image = True, self._image(ev)
         p(f"Writing {len(live)} channel(s)", colours.HEADER, otype.REGULAR)
         self._write_m3u(live)
         self._write_xmltv(live)
+        self.written = tuple(e.key for e in live)
 
     def _number(self, index: int) -> Optional[str]:
         """Channel number for the index-th live event (0-based): major.minor, or None when numbering is off."""
@@ -214,8 +233,9 @@ def run(argv: list):
             now = datetime.datetime.now(UTC)
             if collector.last_listing is None or now - collector.last_listing >= LISTING_REFRESH:
                 collector.refresh_listing(now)
-            if collector.poll(now) or not os.path.isfile(os.path.join(collector.docs, "jellysports.m3u")):
-                collector.write()
+            collector.poll(now)
+            if collector.needs_write(now) or not os.path.isfile(os.path.join(collector.docs, "jellysports.m3u")):
+                collector.write(now)
             if args.once:
                 break
             time.sleep(args.interval)

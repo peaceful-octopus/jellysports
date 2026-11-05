@@ -18,5 +18,7 @@ class Event:
     live: bool = False            # the site's own live flag
     ready: bool = False           # a working stream was confirmed
     attempts: int = 0
+    was_live: bool = False        # a stream has been confirmed at some point
+    image_tried: bool = False
     checked_at: datetime.datetime = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
     image: Optional[str] = None

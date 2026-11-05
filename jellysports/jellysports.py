@@ -22,6 +22,8 @@ PROGRAMME_LENGTH = datetime.timedelta(hours=3)
 # How long after kickoff an event stays in the output and is still looked for.
 KEEP_AFTER_KICKOFF = datetime.timedelta(hours=5)
 LISTING_REFRESH = datetime.timedelta(minutes=5)
+# How often a channel already in the output is checked to still have a stream.
+RECHECK_INTERVAL = datetime.timedelta(minutes=2)
 
 
 def header():
@@ -43,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--lead", type=int, default=5, metavar="MIN", help="start checking an event this many minutes before kickoff (default 5)")
     ap.add_argument("--window", type=int, default=15, metavar="MIN", help="keep checking for this many minutes after kickoff (default 15)")
     ap.add_argument("--interval", type=int, default=30, metavar="SEC", help="seconds between checks (default 30)")
+    ap.add_argument("-n", "--channel-number", type=int, metavar="N",
+                    help="major channel number; channels are numbered N.1, N.2, ... in kickoff order (default: no numbers)")
     ap.add_argument("--site", default=DEFAULT_SITE, help=f"listing site (default {DEFAULT_SITE})")
     ap.add_argument("--proxy-host", default="127.0.0.1", help="interface the stream proxy listens on (use 0.0.0.0 to serve other machines)")
     ap.add_argument("--proxy-port", type=int, default=8099)
@@ -85,7 +89,8 @@ class Collector:
 
     def _due(self, ev: Event, now: datetime.datetime) -> bool:
         if ev.ready:
-            return False
+            # A channel that was playable can go off air; look again now and then.
+            return not self.args.once and now - ev.checked_at >= RECHECK_INTERVAL
         if self.args.once:
             return True
         if now > ev.kickoff + KEEP_AFTER_KICKOFF:
@@ -101,15 +106,21 @@ class Collector:
             if not self._due(ev, now):
                 continue
             ev.attempts += 1
+            ev.checked_at = now
             channel = self.channels.setdefault(ev.key, Channel(ev.embed_url))
             p(f"Checking {ev.title}", colours.WARNING, otype.REGULAR)
             try:
                 channel.index(max_age=0)
+                channel.playlist(lambda sid: sid)  # the index must also yield a playable playlist
             except NotLive:
-                pind2("Not live yet", colours.WARNING, otype.DEBUG)
+                pind2("Not live" if not ev.ready else "Stream went off air, removing channel", colours.WARNING, otype.DEBUG)
+                if ev.ready:
+                    ev.ready, changed = False, True
                 continue
             except ChannelError as e:
                 pind2(f"Not available: {e}", colours.WARNING, otype.DEBUG)
+                continue
+            if ev.ready:
                 continue
             self.proxy.register(ev.key, channel)
             ev.ready = True
@@ -143,20 +154,29 @@ class Collector:
         self._write_m3u(live)
         self._write_xmltv(live)
 
+    def _number(self, index: int) -> Optional[str]:
+        """Channel number for the index-th live event (0-based): major.minor, or None when numbering is off."""
+        major = self.args.channel_number
+        return None if major is None else f"{major}.{index + 1}"
+
     def _write_m3u(self, live: List[Event]):
         with open(os.path.join(self.docs, "jellysports.m3u"), "w", encoding="utf-8") as f:
             f.write("#EXTM3U\n")
-            for ev in live:
+            for i, ev in enumerate(live):
                 logo = f' tvg-logo="{self.proxy.image_url(ev.image)}"' if ev.image else ""
+                if self._number(i):
+                    logo += f' tvg-chno="{self._number(i)}"'
                 f.write(f'#EXTINF:-1 tvg-id="{ev.key}" tvg-language="English"{logo} group-title="{ev.sport}",{ev.title}\n')
                 f.write(f"{self.proxy.stream_url(ev.key)}\n")
 
     def _write_xmltv(self, live: List[Event]):
         fmt = "%Y%m%d%H%M%S +0000"
         root = ET.Element("tv")
-        for ev in live:
+        for i, ev in enumerate(live):
             ch = ET.SubElement(root, "channel", id=ev.key)
             ET.SubElement(ch, "display-name").text = ev.title
+            if self._number(i):
+                ET.SubElement(ch, "display-name").text = self._number(i)
             if ev.image:
                 ET.SubElement(ch, "icon", src=self.proxy.image_url(ev.image))
         for ev in live:

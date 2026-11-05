@@ -61,6 +61,7 @@ Useful options:
 | `-d`, `--once` | Check every matching event once, ignoring kickoff times, then exit |
 | `--lead MIN` / `--window MIN` | Start checking this many minutes before kickoff (5) / keep checking this long after (15) |
 | `--interval SEC` | Seconds between checks (30) |
+| `-n`, `--channel-number N` | Number channels `N.1`, `N.2`, ... in kickoff order so they sit at a chosen position in a guide with other channels (default: no numbers) |
 | `--proxy-host`, `--proxy-port` | Where the stream proxy listens (default `127.0.0.1:8099`; use `0.0.0.0` to serve other machines) |
 | `--public-url URL` | Address players use to reach the proxy (default `http://localhost:8099`) |
 | `--site URL` | Listing site, in case the domain changes |
